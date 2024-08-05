@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket API Documentation</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #messages { width: 100%; height: 300px; }
+        #sendMessage { width: 100%; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket API Documentation</h1>
+    <label for="wsUrl">WebSocket URL:</label>
+    <input type="text" id="wsUrl" value="ws://localhost:8080/ws">
+    <button onclick="connect()">Connect</button>
+    <h2>Messages</h2>
+    <textarea id="messages" readonly></textarea>
+    <br>
+    <label for="messageInput">Send a message:</label>
+    <input type="text" id="messageInput">
+    <button onclick="sendMessage()">Send</button>
+
+    <script>
+        let ws;
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                logMessage('Connected to ' + url);
+            };
+
+            ws.onmessage = (event) => {
+                logMessage('Received: ' + event.data);
+            };
+
+            ws.onclose = () => {
+                logMessage('Disconnected');
+            };
+
+            ws.onerror = (error) => {
+                logMessage('Error: ' + error.message);
+            };
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('messageInput').value;
+            ws.send(message);
+            logMessage('Sent: ' + message);
+        }
+
+        function logMessage(message) {
+            const messages = document.getElementById('messages');
+            messages.value += message + '\n';
+            messages.scrollTop = messages.scrollHeight;
+        }
+    </script>
+</body>
+</html>
