@@ -3,14 +3,16 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"html/template"
 	"log"
 	"net/http"
-	"path/filepath"
+	"os"
 	"slices"
 	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/lithammer/shortuuid"
+	"github.com/russross/blackfriday/v2"
 	"github.com/shankarammai/Peer2PeerConnector/internal/client"
 	responsemessage "github.com/shankarammai/Peer2PeerConnector/internal/response"
 	"github.com/shankarammai/Peer2PeerConnector/internal/room"
@@ -30,60 +32,87 @@ var (
 	mu      sync.Mutex
 )
 
-// HandleWebSocketConnection handles websocket connection
+func ServerDocs(writer http.ResponseWriter, request *http.Request) {
+	tmpl, err := template.ParseFiles("public/index.html")
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	markdown, err := os.ReadFile("docs/docs.md")
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	html := blackfriday.Run(markdown)
+
+	data := DocPage{
+		Title:   "Peer2Peer Connector Documentation",
+		Content: template.HTML(html),
+	}
+
+	err = tmpl.Execute(writer, data)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type DocPage struct {
+	Title   string
+	Content template.HTML
+}
+
+// HandleWebSocketConnection websocket connection
 func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request) {
-	if websocket.IsWebSocketUpgrade(request) {
-		connection, error := upgrader.Upgrade(writer, request, nil)
-		if error != nil {
-			log.Println("Failed to upgrade connection")
-			return
-		}
-		log.Printf("Connection from: %s \n", connection.RemoteAddr())
+	connection, error := upgrader.Upgrade(writer, request, nil)
+	if error != nil {
+		log.Println("Failed to upgrade connection")
+		return
+	}
+	log.Printf("Connection from: %s \n", connection.RemoteAddr())
 
-		// Client connected add to clients with new Id seperating all clients
-		clientId := shortuuid.New()
-		client := &client.Client{
-			Id:         clientId,
-			Connection: connection,
-		}
-		//Adding client to clients map.
-		mu.Lock()
-		clients[clientId] = client
-		mu.Unlock()
-		log.Println("Client Added : ", clientId)
+	// Client connected add to clients with new Id seperating all clients
+	clientId := shortuuid.New()
+	client := &client.Client{
+		Id:         clientId,
+		Connection: connection,
+	}
+	//Adding client to clients map.
+	mu.Lock()
+	clients[clientId] = client
+	mu.Unlock()
+	log.Println("Client Added : ", clientId)
 
-		//need and closed the connection and clean up
-		defer func() {
-			log.Println("WebSocket connection closed by client :", clientId)
-			removeClientFromRoom(clientId, true)
-			err := connection.Close()
-			if err != nil {
-				log.Println("Failed to close WebSocket connection:", err)
-			}
-			log.Println("WebSocket connection closed for client :", clientId)
-		}()
-
-		// send the clientId back to client
-		error = connection.WriteJSON(responsemessage.InfoMessage(
-			"client_details",
-			map[string]interface{}{"id": clientId},
-		))
-		if error != nil {
-			log.Println("Write Json Error", error)
+	//need and closed the connection and clean up
+	defer func() {
+		log.Println("WebSocket connection closed by client :", clientId)
+		removeClientFromRoom(clientId, true)
+		err := connection.Close()
+		if err != nil {
+			log.Println("Failed to close WebSocket connection:", err)
 		}
+		log.Println("WebSocket connection closed for client :", clientId)
+	}()
 
-		// Read messages from all the client and create go routines for them
-		for {
-			_, message, err := connection.ReadMessage()
-			if err != nil {
-				log.Println("Read error:", err)
-				break
-			}
-			// Handle all types of messages
-			go handleMessage(client, message)
+	// send the clientId back to client
+	error = connection.WriteJSON(responsemessage.InfoMessage(
+		"client_details",
+		map[string]interface{}{"id": clientId},
+	))
+	if error != nil {
+		log.Println("Write Json Error", error)
+	}
+
+	// Read messages from all the client and create go routines for them
+	for {
+		_, message, err := connection.ReadMessage()
+		if err != nil {
+			log.Println("Read error:", err)
+			break
 		}
-	} else {
-		http.ServeFile(writer, request, filepath.Join("public", "index.html"))
+		// Handle all types of messages
+		go handleMessage(client, message)
 	}
 }
 
@@ -134,14 +163,42 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	mu.Unlock()
 	if !exists {
 		log.Printf("Target client %s not found \n.", targetID)
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
+		return
+	}
+
+	// Check if "data" exists and is a map
+	data, ok := message["data"].(map[string]interface{})
+	if !ok {
+		log.Println("'data' field is missing or not a map")
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+
+		return
+	}
+
+	// Check if "sdp" exists
+	sdp, sdpExists := data["sdp"]
+	if !sdpExists {
+		log.Println("'data''sdp' field is missing or nil")
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
+		return
+	}
+
+	// Check if "candidate" exists
+	candidate, candidateExists := data["candidate"]
+	if !candidateExists {
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
+		log.Println("'data''candidate' field is missing or nil")
 		return
 	}
 
 	connectMsg := map[string]interface{}{
-		"type":      "offer",
-		"from":      client.Id,
-		"sdp":       message["sdp"],
-		"candidate": message["candidate"],
+		"type": "offer",
+		"from": client.Id,
+		"data": map[string]interface{}{
+			"sdp":       sdp,
+			"candidate": candidate,
+		},
 	}
 	if err := targetClient.GetConnection().WriteJSON(responsemessage.InfoMessage("offer", connectMsg)); err != nil {
 		log.Printf("Failed to send connect request to target client %s: %v \n.", targetID, err)
@@ -149,7 +206,16 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 }
 
 func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) {
-	roomId, exist := msg["room"].(string)
+
+	// Check if "data" exists and is a map
+	data, dataOk := msg["data"].(map[string]interface{})
+	if !dataOk {
+		log.Println("'data' field is missing or not a map")
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+		return
+	}
+
+	roomId, exist := data["room"].(string)
 	if !exist {
 		roomId = shortuuid.New()
 	}
@@ -157,7 +223,7 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 	from := client.GetClientId()
 
 	//get the room name if exits, optional
-	roomName, ok := msg["name"].(string)
+	roomName, ok := data["name"].(string)
 	if !ok {
 		roomName = ""
 	}
@@ -176,13 +242,15 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 		log.Println("Creating room with ID: ", roomId)
 	} else {
 		log.Println("Failed to create room (Already exists) ID: ", roomId)
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("duplicate room", map[string]interface{}{"message": roomId + " already exist"}))
+		client.GetConnection().WriteJSON(
+			responsemessage.ErrorMessage(
+				" duplicate room", map[string]interface{}{"message": roomId + " already exist"}))
 		return
 	}
 
 	// if we created room
 	// now send all the client id in this room to all clients
-	err := client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_created", map[string]interface{}{"clients": myRoom.GetClients(), "roomId": roomId, "name": myRoom.GetName()}))
+	err := client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_created", map[string]interface{}{"clients": myRoom.GetClients(), "room": roomId, "name": myRoom.GetName()}))
 	if err != nil {
 		log.Println("Failed to send all clients details to: ", client.Id)
 	}
@@ -193,8 +261,9 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
 	}
+	data := msg["data"].(map[string]interface{})
 	from := client.GetClientId()
-	roomId, _ := msg["room"].(string)
+	roomId, _ := data["room"].(string)
 	room := rooms[roomId]
 
 	if room.GetCreator() != from {
@@ -203,7 +272,7 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 		return
 	}
 
-	notifyUpdateIntheRoom(roomId, "room deleted")
+	notifyUpdateIntheRoom(roomId, "room_deleted")
 
 	// after all the checks actually delete the room
 	mu.Lock()
@@ -218,8 +287,9 @@ func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
 	}
+	data := msg["data"].(map[string]interface{})
 	// room exist here
-	roomId, _ := msg["room"].(string)
+	roomId, _ := data["room"].(string)
 	// room should exist as well
 	myRoom := rooms[roomId]
 	from := client.GetClientId()
@@ -233,7 +303,7 @@ func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 		myRoom.AddClient(from)
 		mu.Unlock()
 		// notify all clients in this room about the new clients in the room.
-		notifyUpdateIntheRoom(roomId, "client added")
+		notifyUpdateIntheRoom(roomId, "client_added")
 	}
 }
 
@@ -241,17 +311,19 @@ func handleLeaveRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
 	}
+	data := msg["data"].(map[string]interface{})
 	from := client.GetClientId()
 	// room should exist here
-	roomId, _ := msg["room"].(string)
+	roomId, _ := data["room"].(string)
 	//check if client in room
 	room := rooms[roomId]
 	if slices.Contains(room.GetClients(), from) {
 		removeClientFromRoom(from, false, roomId)
+		client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_left",map[string]interface{}{"room":roomId}))
 	} else {
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Client not found", map[string]interface{}{"message": "Client does not exists in the room."}))
 	}
-	log.Printf("%s left room %s \n", from, room)
+	log.Printf("%s left room %s \n", from, room.GetId())
 
 	//if room is empty delete it.
 	if len(room.GetClients()) == 0 {
@@ -260,13 +332,19 @@ func handleLeaveRoomMessage(client *client.Client, msg map[string]interface{}) {
 		mu.Unlock()
 		log.Printf("room %s deleted as it was empty \n", roomId)
 	}
-
 }
 
 // checkRoomInJSON checks if 'room' exist in JSON.
 func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
+	// Check if "data" exists and is a map
+	data, dataOk := msg["data"].(map[string]interface{})
+	if !dataOk {
+		log.Println("'data' field is missing or not a map")
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+		return false
+	}
 	// check if room exist
-	roomId, ok := msg["room"].(string)
+	roomId, ok := data["room"].(string)
 	if !ok {
 		log.Println("You need room Id to join room.")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'room' field is missing in the request."}))
@@ -305,6 +383,8 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	mu.Unlock()
 	if !exists {
 		log.Printf("Target client %s not found. \n", targetID)
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
+
 		return
 	}
 
@@ -330,7 +410,9 @@ func notifyUpdateIntheRoom(roomId string, message string) {
 	for _, clientIdItem := range room.GetClients() {
 		clientInRoom, ok := clients[clientIdItem]
 		if ok {
-			clientInRoom.GetConnection().WriteJSON(responsemessage.UpdateMessage(message, map[string]interface{}{"clients": room.GetClients()}))
+			clientInRoom.GetConnection().WriteJSON(responsemessage.UpdateMessage(
+				message,
+				map[string]interface{}{"clients": room.GetClients(),"room":room.GetId(),"name":room.GetName()}))
 		}
 	}
 }
@@ -355,7 +437,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 		mu.Unlock()
 
 		// notify all clients in this room about the update
-		notifyUpdateIntheRoom(roomIds[0], "client removed")
+		notifyUpdateIntheRoom(roomIds[0], "client_removed")
 	}
 	// if we did not pass room Id we have to find from which room to delete
 	// if client closed it's connection, we need to find of they are in room if yes delete
@@ -364,7 +446,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 		for _, roomItem := range rooms {
 			for _, clientInRoom := range roomItem.GetClients() {
 				if clientInRoom == clientId {
-					notifyUpdateIntheRoom(roomItem.GetId(), "client removed")
+					notifyUpdateIntheRoom(roomItem.GetId(), "client_removed")
 					mu.Lock()
 					roomItem.RemoveClient(clientId)
 					mu.Unlock()
