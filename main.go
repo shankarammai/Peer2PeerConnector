@@ -12,7 +12,7 @@ import (
 func main() {
 	log.Println("Starting Web Server at port: 8080")
 	http.HandleFunc("/", handleRequest)
-	HandleErrorLine(http.ListenAndServe(":4416", nil))
+	HandleErrorLine(http.ListenAndServe(":8080", nil))
 }
 
 // handleWebRequest serves WebSocket on wss:// and Swagger docs on http://
