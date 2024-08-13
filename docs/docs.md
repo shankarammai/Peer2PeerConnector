@@ -49,6 +49,9 @@
 
 ## WebSocket Connection
 ### Initial Server Response
+```
+let webSocket = new WebSocket("peer2peerconnector.shankarammai.com.np");
+```
 
 When a client successfully connects to the server, the server will send an initial message containing details about the connected client.
 
