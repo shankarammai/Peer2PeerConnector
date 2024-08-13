@@ -1,10 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"html/template"
-	"log"
 	"net/http"
 	"os"
 	"slices"
@@ -12,10 +12,36 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lithammer/shortuuid"
-	"github.com/russross/blackfriday/v2"
 	"github.com/shankarammai/Peer2PeerConnector/internal/client"
 	responsemessage "github.com/shankarammai/Peer2PeerConnector/internal/response"
 	"github.com/shankarammai/Peer2PeerConnector/internal/room"
+	"github.com/sirupsen/logrus"
+	"github.com/yuin/goldmark"
+	highlighting "github.com/yuin/goldmark-highlighting"
+	"github.com/yuin/goldmark/renderer/html"
+)
+
+var logger = &logrus.Logger{
+	Out:   os.Stderr,
+	Level: logrus.DebugLevel,
+	Formatter: &logrus.TextFormatter{
+		DisableColors:   false,
+		TimestampFormat: "2024-01-02 15:04:05",
+		FullTimestamp:   true,
+		ForceColors:     true,
+	},
+}
+
+const (
+	MsgTypeConnect    = "connect"
+	MsgTypeCreateRoom = "create_room"
+	MsgTypeJoinRoom   = "join_room"
+	MsgTypeLeaveRoom  = "leave_room"
+	MsgTypeEndRoom    = "end_room"
+	MsgTypeOffer      = "offer"
+	MsgTypeAnswer     = "answer"
+	MsgTypeCandidate  = "candidate"
+	MsgTypeMessage    = "message"
 )
 
 var upgrader = websocket.Upgrader{
@@ -32,45 +58,69 @@ var (
 	mu      sync.Mutex
 )
 
+// ServerDocs serves the Markdown documentation as an HTML page.
+// It reads the Markdown file located at "docs/docs.md", converts it to HTML using Goldmark,
+// and then renders it using an HTML template located at "public/index.html".
 func ServerDocs(writer http.ResponseWriter, request *http.Request) {
+	// Load the Markdown file
+	mdFile := "docs/docs.md"
+	mdContent, err := os.ReadFile(mdFile)
+	if err != nil {
+		http.Error(writer, "Could not read Markdown file", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert Markdown to HTML using Goldmark
+	var buf bytes.Buffer
+	md := goldmark.New(
+		goldmark.WithRendererOptions(
+			html.WithHardWraps(),
+			html.WithXHTML(),
+		),
+		goldmark.WithExtensions(
+			highlighting.NewHighlighting(
+				highlighting.WithStyle("monokai"), // Change style as needed
+				highlighting.WithFormatOptions(),
+			),
+		),
+	)
+
+	if err := md.Convert(mdContent, &buf); err != nil {
+		http.Error(writer, "Could not convert Markdown to HTML", http.StatusInternalServerError)
+		return
+	}
+
+	// Load and parse the HTML template
 	tmpl, err := template.ParseFiles("public/index.html")
 	if err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		http.Error(writer, "Could not parse template", http.StatusInternalServerError)
 		return
 	}
 
-	markdown, err := os.ReadFile("docs/docs.md")
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	// Execute the template with the HTML content
+	data := struct {
+		Content template.HTML
+	}{
+		Content: template.HTML(buf.String()), // Safely inject the HTML content
+	}
+
+	if err := tmpl.Execute(writer, data); err != nil {
+		http.Error(writer, "Could not execute template", http.StatusInternalServerError)
 		return
 	}
-
-	html := blackfriday.Run(markdown)
-
-	data := DocPage{
-		Title:   "Peer2Peer Connector Documentation",
-		Content: template.HTML(html),
-	}
-
-	err = tmpl.Execute(writer, data)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
-	}
 }
 
-type DocPage struct {
-	Title   string
-	Content template.HTML
-}
-
-// HandleWebSocketConnection websocket connection
+// HandleWebSocketConnection handles WebSocket connections.
+// It upgrades the HTTP connection to a WebSocket, assigns a unique client ID,
+// and starts reading messages from the client. It also handles client disconnection
+// and cleans up resources.
 func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request) {
 	connection, error := upgrader.Upgrade(writer, request, nil)
 	if error != nil {
-		log.Println("Failed to upgrade connection")
+		logger.Error("Failed to upgrade connection")
 		return
 	}
-	log.Printf("Connection from: %s \n", connection.RemoteAddr())
+	logger.Infof("Connection from: %s \n", connection.RemoteAddr())
 
 	// Client connected add to clients with new Id seperating all clients
 	clientId := shortuuid.New()
@@ -82,17 +132,16 @@ func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request
 	mu.Lock()
 	clients[clientId] = client
 	mu.Unlock()
-	log.Println("Client Added : ", clientId)
+	logger.Info("Client Added : ", clientId)
 
 	//need and closed the connection and clean up
 	defer func() {
-		log.Println("WebSocket connection closed by client :", clientId)
 		removeClientFromRoom(clientId, true)
 		err := connection.Close()
 		if err != nil {
-			log.Println("Failed to close WebSocket connection:", err)
+			logger.Error("Failed to close WebSocket connection:", err)
 		}
-		log.Println("WebSocket connection closed for client :", clientId)
+		logger.Info("WebSocket connection closed for client :", clientId)
 	}()
 
 	// send the clientId back to client
@@ -101,14 +150,14 @@ func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request
 		map[string]interface{}{"id": clientId},
 	))
 	if error != nil {
-		log.Println("Write Json Error", error)
+		logger.Error("Write Json Error", error)
 	}
 
 	// Read messages from all the client and create go routines for them
 	for {
 		_, message, err := connection.ReadMessage()
 		if err != nil {
-			log.Println("Read error:", err)
+			logger.Error("Read error:", err)
 			break
 		}
 		// Handle all types of messages
@@ -116,44 +165,50 @@ func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request
 	}
 }
 
-// Function to remove a client from the map
+// removeClient removes a client from the clients map by its client ID.
+// It locks the mutex to ensure thread-safe access to the clients map
+// and logs the removal of the client.
 func removeClient(clientID string) {
 	mu.Lock()
 	delete(clients, clientID)
 	mu.Unlock()
-	log.Printf("Client removed:  %s \n", clientID)
+	logger.Info("Client removed:  %s \n", clientID)
 }
 
+// handleMessage processes incoming messages from clients based on their type.
+// It routes the messages to appropriate handlers for connection, room management, and relaying messages.
 func handleMessage(client *client.Client, message []byte) {
 	var json_msg map[string]interface{}
 	parseErr := json.Unmarshal(message, &json_msg)
 	if parseErr != nil {
-		log.Println("Failed to parse JSON: ", message)
+		logger.Error("Failed to parse JSON: ", message)
 		return
 	}
 
-	log.Printf("Received message: %v \n", json_msg)
 	switch json_msg["type"] {
-	case "connect":
+	case MsgTypeConnect:
 		handleConnectMessage(client, json_msg)
-	case "create_room":
+	case MsgTypeCreateRoom:
 		handleCreateRoomMessage(client, json_msg)
-	case "join_room":
+	case MsgTypeJoinRoom:
 		handleJoinRoomMessage(client, json_msg)
-	case "leave_room":
+	case MsgTypeLeaveRoom:
 		handleLeaveRoomMessage(client, json_msg)
-	case "end_room":
+	case MsgTypeEndRoom:
 		handleEndRoomMessage(client, json_msg)
-	case "offer", "answer", "candidate", "message":
+	case MsgTypeOffer, MsgTypeAnswer, MsgTypeCandidate, MsgTypeMessage:
 		relayMessageToTarget(client, json_msg)
 	}
 }
 
+// handleConnectMessage processes a "connect" message.
+// It checks if the target client exists, validates required fields,
+// and sends a connection offer to the target client.
 func handleConnectMessage(client *client.Client, message map[string]interface{}) {
 	// check if message has target_id
 	targetID, ok := message["to"].(string)
 	if !ok {
-		log.Println("Target ID not found in connect message.")
+		logger.Debug("Target ID not found in connect message.")
 		return
 	}
 
@@ -162,7 +217,7 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	targetClient, exists := clients[targetID]
 	mu.Unlock()
 	if !exists {
-		log.Printf("Target client %s not found \n.", targetID)
+		logger.Debugf("Target client %s not found \n.", targetID)
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
 		return
 	}
@@ -170,16 +225,15 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	// Check if "data" exists and is a map
 	data, ok := message["data"].(map[string]interface{})
 	if !ok {
-		log.Println("'data' field is missing or not a map")
+		logger.Debugf("'data' field is missing or not a map")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
-
 		return
 	}
 
 	// Check if "sdp" exists
 	sdp, sdpExists := data["sdp"]
 	if !sdpExists {
-		log.Println("'data''sdp' field is missing or nil")
+		logger.Debug("'data''sdp' field is missing or nil")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
 		return
 	}
@@ -188,7 +242,7 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	candidate, candidateExists := data["candidate"]
 	if !candidateExists {
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
-		log.Println("'data''candidate' field is missing or nil")
+		logger.Debug("'data''candidate' field is missing or nil")
 		return
 	}
 
@@ -201,16 +255,19 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 		},
 	}
 	if err := targetClient.GetConnection().WriteJSON(responsemessage.InfoMessage("offer", connectMsg)); err != nil {
-		log.Printf("Failed to send connect request to target client %s: %v \n.", targetID, err)
+		logger.Debugf("Failed to send connect request to target client %s: %v \n.", targetID, err)
 	}
 }
 
+// handleCreateRoomMessage processes a "create_room" message.
+// It creates a new room if it doesn't already exist, adds the room to the rooms map,
+// and notifies the client about the room creation.
 func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) {
 
 	// Check if "data" exists and is a map
 	data, dataOk := msg["data"].(map[string]interface{})
 	if !dataOk {
-		log.Println("'data' field is missing or not a map")
+		logger.Debug("'data' field is missing or not a map")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
 		return
 	}
@@ -239,9 +296,9 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 		myRoom = room.NewRoom(roomId, roomName, from)
 		rooms[roomId] = myRoom
 		mu.Unlock()
-		log.Println("Creating room with ID: ", roomId)
+		logger.Info("Creating room with ID: ", roomId)
 	} else {
-		log.Println("Failed to create room (Already exists) ID: ", roomId)
+		logger.Debug("Failed to create room (Already exists) ID: ", roomId)
 		client.GetConnection().WriteJSON(
 			responsemessage.ErrorMessage(
 				" duplicate room", map[string]interface{}{"message": roomId + " already exist"}))
@@ -252,11 +309,14 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 	// now send all the client id in this room to all clients
 	err := client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_created", map[string]interface{}{"clients": myRoom.GetClients(), "room": roomId, "name": myRoom.GetName()}))
 	if err != nil {
-		log.Println("Failed to send all clients details to: ", client.Id)
+		logger.Debug("Failed to send all clients details to: ", client.Id)
 	}
 
 }
 
+// handleEndRoomMessage processes an "end_room" message.
+// It verifies the client's permission to delete the room, sends a notification to
+// all clients in the room, and removes the room from the rooms map if it is empty.
 func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
@@ -267,7 +327,7 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 	room := rooms[roomId]
 
 	if room.GetCreator() != from {
-		log.Println("You don't have permissions to delete room: ", roomId)
+		logger.Debug("You don't have permissions to delete room: ", roomId)
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("unauthorised", map[string]interface{}{"message": "You need to be creator of room to delete it."}))
 		return
 	}
@@ -278,11 +338,13 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 	mu.Lock()
 	delete(rooms, roomId)
 	mu.Unlock()
-	log.Println("Room Deleted: ", roomId)
+	logger.Info("Room Deleted: ", roomId)
 
 }
 
-// handleJoinRoomMessage handles joining room message
+// handleJoinRoomMessage processes a "join_room" message.
+// It checks if the room exists, verifies that the client is not already in the room,
+// adds the client to the room, and notifies all clients in the room about the new client.
 func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
@@ -307,6 +369,9 @@ func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 	}
 }
 
+// handleLeaveRoomMessage processes a "leave_room" message.
+// It verifies that the client is in the room, removes the client from the room,
+// and deletes the room if it is empty. It also sends a notification to all clients in the room.
 func handleLeaveRoomMessage(client *client.Client, msg map[string]interface{}) {
 	if !checkRoomInJSON(client, msg) {
 		return
@@ -319,34 +384,36 @@ func handleLeaveRoomMessage(client *client.Client, msg map[string]interface{}) {
 	room := rooms[roomId]
 	if slices.Contains(room.GetClients(), from) {
 		removeClientFromRoom(from, false, roomId)
-		client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_left",map[string]interface{}{"room":roomId}))
+		client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_left", map[string]interface{}{"room": roomId}))
 	} else {
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Client not found", map[string]interface{}{"message": "Client does not exists in the room."}))
 	}
-	log.Printf("%s left room %s \n", from, room.GetId())
+	logger.Infof("%s left room %s \n", from, room.GetId())
 
 	//if room is empty delete it.
 	if len(room.GetClients()) == 0 {
 		mu.Lock()
 		delete(rooms, roomId)
 		mu.Unlock()
-		log.Printf("room %s deleted as it was empty \n", roomId)
+		logger.Infof("room %s deleted as it was empty \n", roomId)
 	}
 }
 
-// checkRoomInJSON checks if 'room' exist in JSON.
+// checkRoomInJSON checks if the room ID exists in the message JSON.
+// It validates that the "data" field contains a valid room ID and checks if the room exists.
+// Returns true if the room is valid, false otherwise.
 func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 	// Check if "data" exists and is a map
 	data, dataOk := msg["data"].(map[string]interface{})
 	if !dataOk {
-		log.Println("'data' field is missing or not a map")
+		logger.Debug("'data' field is missing or not a map")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
 		return false
 	}
 	// check if room exist
 	roomId, ok := data["room"].(string)
 	if !ok {
-		log.Println("You need room Id to join room.")
+		logger.Debug("You need room Id to join room.")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'room' field is missing in the request."}))
 		return false
 	}
@@ -354,7 +421,7 @@ func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 	// check if room with given exists, if yes then add.
 	_, exists := rooms[roomId]
 	if !exists {
-		log.Printf("Failed to join room: %s\n", roomId)
+		logger.Debugf("Room does not exist: %s\n", roomId)
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Invalid Room", map[string]interface{}{"message": "Room with Id " + roomId + " does not exist."}))
 		return false
 	}
@@ -362,18 +429,19 @@ func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 
 }
 
-// relayMessageToTarget forwards message to the 'to' a client when message received from one client
+// relayMessageToTarget forwards a message to the target client specified in the message.
+// It ensures that the target client exists and relays the message, handling various types of messages.
 func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	targetID, ok := msg["to"].(string)
 	if !ok {
-		log.Println("'to' not found in message.")
+		logger.Debug("'to' not found in message.")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("missing fields", map[string]interface{}{"message": "'to' field not found"}))
 		return
 	}
 
 	msgtype, ok2 := msg["type"].(string)
 	if !ok2 {
-		log.Println("'type' not found in message.")
+		logger.Debug("'type' not found in message.")
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("missing fields", map[string]interface{}{"message": "'type' field not found"}))
 		return
 	}
@@ -382,7 +450,7 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	targetClient, exists := clients[targetID]
 	mu.Unlock()
 	if !exists {
-		log.Printf("Target client %s not found. \n", targetID)
+		logger.Debugf("Target client %s not found. \n", targetID)
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
 
 		return
@@ -393,18 +461,19 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 		delete(msg, "to")
 		msg["from"] = client.GetClientId()
 		if err := targetClient.GetConnection().WriteJSON(msg); err != nil {
-			log.Printf("Failed to relay message to target client %s: %v \n", targetID, err)
+			logger.Debugf("Failed to relay message to target client %s: %v \n", targetID, err)
 		}
 	default:
-		log.Println("Unsupported message type: ", msg["type"])
+		logger.Debug("Unsupported message type: ", msg["type"])
 	}
 }
 
-// notifyUpdateIntheRoom notifies update to all the client in the room.
+// notifyUpdateIntheRoom sends an update notification to all clients in the specified room.
+// It informs clients about changes such as client addition or removal.
 func notifyUpdateIntheRoom(roomId string, message string) {
 	room, ok := rooms[roomId]
 	if !ok {
-		log.Println("Room Id not found: ", roomId)
+		logger.Debug("Room Id not found: ", roomId)
 	}
 	// notify all clients in this room about the update
 	for _, clientIdItem := range room.GetClients() {
@@ -412,12 +481,14 @@ func notifyUpdateIntheRoom(roomId string, message string) {
 		if ok {
 			clientInRoom.GetConnection().WriteJSON(responsemessage.UpdateMessage(
 				message,
-				map[string]interface{}{"clients": room.GetClients(),"room":room.GetId(),"name":room.GetName()}))
+				map[string]interface{}{"clients": room.GetClients(), "room": room.GetId(), "name": room.GetName()}))
 		}
 	}
 }
 
-// removeClientFromRoom removes clients from room
+// removeClientFromRoom removes a client from a specified room or all rooms if no room ID is provided.
+// It handles client removal from rooms and optionally removes the client itself if specified.
+// If the client is removed from a room and the room becomes empty, the room is deleted.
 func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string) (bool, error) {
 	if len(roomIds) > 2 {
 		return false, errors.New("invalid args passed, second argument should be roomId.")
@@ -425,11 +496,11 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 	if len(roomIds) == 1 {
 		room, ok := rooms[roomIds[0]]
 		if !ok {
-			log.Println("Room Id not found: ", roomIds[0])
+			logger.Debug("Room Id not found: ", roomIds[0])
 		}
 		_, ok2 := clients[clientId]
 		if !ok2 {
-			log.Println("Client Id not found", clientId)
+			logger.Debug("Client Id not found", clientId)
 		}
 		// first remove client from the room
 		mu.Lock()
@@ -442,7 +513,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 	// if we did not pass room Id we have to find from which room to delete
 	// if client closed it's connection, we need to find of they are in room if yes delete
 	if len(roomIds) == 0 && len(rooms) > 0 {
-		log.Println("Searching and deleting client from room")
+		logger.Debug("Searching and deleting client from room")
 		for _, roomItem := range rooms {
 			for _, clientInRoom := range roomItem.GetClients() {
 				if clientInRoom == clientId {
@@ -455,7 +526,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 						mu.Lock()
 						delete(rooms, roomItem.GetId())
 						mu.Unlock()
-						log.Printf("Room %s deleted because it was empty", roomItem.GetId())
+						logger.Infof("Room %s deleted because it was empty", roomItem.GetId())
 					}
 					break
 				}

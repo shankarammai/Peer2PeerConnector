@@ -28,8 +28,26 @@
 
 ---
 
-## WebSocket Connection
+## Quick usuage
+### Type supported
+- **`connect`**: Used to initiate a connection with another client. This message should include data such as the SDP and candidate information.
+- **`offer`**: Part of the WebRTC connection process, sent by a client to initiate a peer-to-peer connection.
+- **`answer`**: Sent in response to an `offer`, completing the WebRTC connection setup.
+- **`candidate`**: Contains ICE candidate information necessary for establishing the WebRTC connection.
+- **`message`**: General-purpose message type for sending data between connected clients.
+- **`create_room`**: Used to create a new room. The message should include the `room` and optionally the `name` of the room, inside `data` field.
+- **`join_room`**: Used to join a room. The message should include the `room` inside `data` field.
+- **`leave_room`**: Used to leave a room. The message should include the `room` inside `data` field.
+- **`end_room`**: Used to end a room. The message should include the `room` inside `data` field.
 
+##### Notes
+
+- Above mentioned events should be passed to `type` field.
+- Other necessary data should be passed inside `data` field.
+
+##### Example
+
+## WebSocket Connection
 ### Initial Server Response
 
 When a client successfully connects to the server, the server will send an initial message containing details about the connected client.
