@@ -1,17 +1,21 @@
-# 1. Use the official latest Go image as the base image
 FROM golang:latest
 
-# 2. Set the working directory inside the container
-WORKDIR .
+WORKDIR /home/app
 
-# 3. Copy all files from the current directory to the container's working directory
-COPY . .
+# Copy go.mod and go.sum first (if they exist)
+COPY go.mod go.sum* ./
 
-# 4. Download dependencies (optional if you use Go modules)
+# Run go mod tidy to ensure dependencies are correct
 RUN go mod tidy
 
-# 5. Build the Go application
-RUN go build -o myapp .
+# Copy the rest of the source code
+COPY . .
 
-# 6. Set the entrypoint to run the application
-CMD ["./myapp"]
+# Build the application
+RUN go build -o application .
+RUN ls -l
+RUN chmod +x application
+
+EXPOSE 8080
+
+CMD ["./application"]
