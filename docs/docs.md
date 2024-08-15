@@ -121,8 +121,8 @@ If a client tries to send a message to a peer that does not exist (i.e., the pee
 
 ```json
 {
-  "type": "Missing fields",
-  "title": "client missing",
+  "type": "error",
+  "title": "Not_Found",
   "data": {
     "message": "Client with given 7KjNqESrhhTkEfXgFuaGWJ not found"
   },
@@ -211,7 +211,7 @@ If a client tries to send a message to a peer that does not exist (i.e., the pee
 ```json
 {
   "type": "error",
-  "title": "client missing",
+  "title": "Not_Found",
   "data": {
     "message": "Client with given 7KjNqESrhhTkEfXgFuaGWJ not found"
   },
@@ -269,7 +269,7 @@ Response when you send create room request. Clients are the list of clients in t
 ```json
 {
   "type": "info",
-  "title": "room_created",
+  "title": "Room_Created",
   "data": {
     "clients": ["WMYFTzZoX778PaiwjyZd59"],
     "name": "my room name",

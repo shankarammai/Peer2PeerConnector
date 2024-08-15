@@ -146,7 +146,7 @@ func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request
 
 	// send the clientId back to client
 	error = connection.WriteJSON(responsemessage.InfoMessage(
-		"client_details",
+		"Client_Details",
 		map[string]interface{}{"id": clientId},
 	))
 	if error != nil {
@@ -218,7 +218,7 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	mu.Unlock()
 	if !exists {
 		logger.Debugf("Target client %s not found \n.", targetID)
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Not_Found", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
 		return
 	}
 
@@ -226,7 +226,7 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	data, ok := message["data"].(map[string]interface{})
 	if !ok {
 		logger.Debugf("'data' field is missing or not a map")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
 		return
 	}
 
@@ -234,14 +234,14 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	sdp, sdpExists := data["sdp"]
 	if !sdpExists {
 		logger.Debug("'data''sdp' field is missing or nil")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
 		return
 	}
 
 	// Check if "candidate" exists
 	candidate, candidateExists := data["candidate"]
 	if !candidateExists {
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
 		logger.Debug("'data''candidate' field is missing or nil")
 		return
 	}
@@ -268,7 +268,7 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 	data, dataOk := msg["data"].(map[string]interface{})
 	if !dataOk {
 		logger.Debug("'data' field is missing or not a map")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
 		return
 	}
 
@@ -301,13 +301,13 @@ func handleCreateRoomMessage(client *client.Client, msg map[string]interface{}) 
 		logger.Debug("Failed to create room (Already exists) ID: ", roomId)
 		client.GetConnection().WriteJSON(
 			responsemessage.ErrorMessage(
-				" duplicate room", map[string]interface{}{"message": roomId + " already exist"}))
+				"Duplicate_Room", map[string]interface{}{"message": roomId + " already exist"}))
 		return
 	}
 
 	// if we created room
 	// now send all the client id in this room to all clients
-	err := client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_created", map[string]interface{}{"clients": myRoom.GetClients(), "room": roomId, "name": myRoom.GetName()}))
+	err := client.GetConnection().WriteJSON(responsemessage.InfoMessage("Room_Created", map[string]interface{}{"clients": myRoom.GetClients(), "room": roomId, "name": myRoom.GetName()}))
 	if err != nil {
 		logger.Debug("Failed to send all clients details to: ", client.Id)
 	}
@@ -328,7 +328,7 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 
 	if room.GetCreator() != from {
 		logger.Debug("You don't have permissions to delete room: ", roomId)
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("unauthorised", map[string]interface{}{"message": "You need to be creator of room to delete it."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Unauthorised", map[string]interface{}{"message": "You need to be creator of room to delete it."}))
 		return
 	}
 
@@ -358,7 +358,7 @@ func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 
 	// check client already in the room.
 	if slices.Contains(myRoom.GetClients(), roomId) {
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Already exists", map[string]interface{}{"message": "Client already exists in the room."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Already_Exists", map[string]interface{}{"message": "Client already exists in the room."}))
 		return
 	} else {
 		mu.Lock()
@@ -384,9 +384,9 @@ func handleLeaveRoomMessage(client *client.Client, msg map[string]interface{}) {
 	room := rooms[roomId]
 	if slices.Contains(room.GetClients(), from) {
 		removeClientFromRoom(from, false, roomId)
-		client.GetConnection().WriteJSON(responsemessage.InfoMessage("room_left", map[string]interface{}{"room": roomId}))
+		client.GetConnection().WriteJSON(responsemessage.InfoMessage("Room_Left", map[string]interface{}{"room": roomId}))
 	} else {
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Client not found", map[string]interface{}{"message": "Client does not exists in the room."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Not_Found", map[string]interface{}{"message": "Client does not exists in the room."}))
 	}
 	logger.Infof("%s left room %s \n", from, room.GetId())
 
@@ -407,14 +407,14 @@ func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 	data, dataOk := msg["data"].(map[string]interface{})
 	if !dataOk {
 		logger.Debug("'data' field is missing or not a map")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data' field is missing or is not object in the request."}))
 		return false
 	}
 	// check if room exist
 	roomId, ok := data["room"].(string)
 	if !ok {
 		logger.Debug("You need room Id to join room.")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing fields", map[string]interface{}{"message": "'room' field is missing in the request."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'room' field is missing in the request."}))
 		return false
 	}
 
@@ -422,7 +422,7 @@ func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 	_, exists := rooms[roomId]
 	if !exists {
 		logger.Debugf("Room does not exist: %s\n", roomId)
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Invalid Room", map[string]interface{}{"message": "Room with Id " + roomId + " does not exist."}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Not_Found", map[string]interface{}{"message": "Room with Id " + roomId + " does not exist."}))
 		return false
 	}
 	return true
@@ -435,14 +435,14 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	targetID, ok := msg["to"].(string)
 	if !ok {
 		logger.Debug("'to' not found in message.")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("missing fields", map[string]interface{}{"message": "'to' field not found"}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'to' field not found"}))
 		return
 	}
 
 	msgtype, ok2 := msg["type"].(string)
 	if !ok2 {
 		logger.Debug("'type' not found in message.")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("missing fields", map[string]interface{}{"message": "'type' field not found"}))
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'type' field not found"}))
 		return
 	}
 
@@ -451,8 +451,7 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	mu.Unlock()
 	if !exists {
 		logger.Debugf("Target client %s not found. \n", targetID)
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("client missing", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
-
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Not_Found", map[string]interface{}{"message": "Client with given " + targetID + " not found"}))
 		return
 	}
 
