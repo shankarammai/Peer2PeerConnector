@@ -33,15 +33,15 @@ var logger = &logrus.Logger{
 }
 
 const (
-	MsgTypeConnect    = "connect"
-	MsgTypeCreateRoom = "create_room"
-	MsgTypeJoinRoom   = "join_room"
-	MsgTypeLeaveRoom  = "leave_room"
-	MsgTypeEndRoom    = "end_room"
-	MsgTypeOffer      = "offer"
-	MsgTypeAnswer     = "answer"
-	MsgTypeCandidate  = "candidate"
-	MsgTypeMessage    = "message"
+	MsgTypeConnect    = "Connect"
+	MsgTypeCreateRoom = "Create_Room"
+	MsgTypeJoinRoom   = "Join_Room"
+	MsgTypeLeaveRoom  = "Leave_Room"
+	MsgTypeEndRoom    = "End_Room"
+	MsgTypeOffer      = "Offer"
+	MsgTypeAnswer     = "Answer"
+	MsgTypeCandidate  = "Candidate"
+	MsgTypeMessage    = "Message"
 )
 
 var upgrader = websocket.Upgrader{
@@ -160,7 +160,7 @@ func HandleWebSocketConnection(writer http.ResponseWriter, request *http.Request
 			logger.Error("Read error:", err)
 			break
 		}
-		// Handle all types of messages
+		// Handle all messages
 		go handleMessage(client, message)
 	}
 }
@@ -175,7 +175,7 @@ func removeClient(clientID string) {
 	logger.Info("Client removed:  %s \n", clientID)
 }
 
-// handleMessage processes incoming messages from clients based on their type.
+// handleMessage processes incoming messages from clients based on their event.
 // It routes the messages to appropriate handlers for connection, room management, and relaying messages.
 func handleMessage(client *client.Client, message []byte) {
 	var json_msg map[string]interface{}
@@ -185,7 +185,7 @@ func handleMessage(client *client.Client, message []byte) {
 		return
 	}
 
-	switch json_msg["type"] {
+	switch json_msg["event"] {
 	case MsgTypeConnect:
 		handleConnectMessage(client, json_msg)
 	case MsgTypeCreateRoom:
@@ -198,7 +198,23 @@ func handleMessage(client *client.Client, message []byte) {
 		handleEndRoomMessage(client, json_msg)
 	case MsgTypeOffer, MsgTypeAnswer, MsgTypeCandidate, MsgTypeMessage:
 		relayMessageToTarget(client, json_msg)
+	default:
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Unsupported_Event", map[string]interface{}{
+			"events": []string{
+				MsgTypeConnect,
+				MsgTypeCreateRoom,
+				MsgTypeJoinRoom,
+				MsgTypeLeaveRoom,
+				MsgTypeEndRoom,
+				MsgTypeOffer,
+				MsgTypeAnswer,
+				MsgTypeCandidate,
+				MsgTypeMessage,
+			},
+		},
+		))
 	}
+
 }
 
 // handleConnectMessage processes a "connect" message.
@@ -239,7 +255,7 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	}
 
 	// Check if "candidate" exists
-	candidate, candidateExists := data["candidate"]
+	candidate, candidateExists := data[MsgTypeCandidate]
 	if !candidateExists {
 		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'data''sdp' field is missing in the request."}))
 		logger.Debug("'data''candidate' field is missing or nil")
@@ -247,14 +263,14 @@ func handleConnectMessage(client *client.Client, message map[string]interface{})
 	}
 
 	connectMsg := map[string]interface{}{
-		"type": "offer",
-		"from": client.Id,
+		"event": MsgTypeOffer,
+		"from":  client.Id,
 		"data": map[string]interface{}{
 			"sdp":       sdp,
 			"candidate": candidate,
 		},
 	}
-	if err := targetClient.GetConnection().WriteJSON(responsemessage.InfoMessage("offer", connectMsg)); err != nil {
+	if err := targetClient.GetConnection().WriteJSON(responsemessage.InfoMessage(MsgTypeOffer, connectMsg)); err != nil {
 		logger.Debugf("Failed to send connect request to target client %s: %v \n.", targetID, err)
 	}
 }
@@ -332,7 +348,7 @@ func handleEndRoomMessage(client *client.Client, msg map[string]interface{}) {
 		return
 	}
 
-	notifyUpdateIntheRoom(roomId, "room_deleted")
+	notifyUpdateIntheRoom(roomId, "Room_Deleted")
 
 	// after all the checks actually delete the room
 	mu.Lock()
@@ -363,9 +379,10 @@ func handleJoinRoomMessage(client *client.Client, msg map[string]interface{}) {
 	} else {
 		mu.Lock()
 		myRoom.AddClient(from)
+		logger.Infof("Client (%s) added to Room (%s)", from, roomId)
 		mu.Unlock()
 		// notify all clients in this room about the new clients in the room.
-		notifyUpdateIntheRoom(roomId, "client_added")
+		notifyUpdateIntheRoom(roomId, "Client_Added")
 	}
 }
 
@@ -430,7 +447,7 @@ func checkRoomInJSON(client *client.Client, msg map[string]interface{}) bool {
 }
 
 // relayMessageToTarget forwards a message to the target client specified in the message.
-// It ensures that the target client exists and relays the message, handling various types of messages.
+// It ensures that the target client exists and relays the message, handling various events.
 func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	targetID, ok := msg["to"].(string)
 	if !ok {
@@ -439,10 +456,10 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 		return
 	}
 
-	msgtype, ok2 := msg["type"].(string)
+	msgtype, ok2 := msg["event"].(string)
 	if !ok2 {
-		logger.Debug("'type' not found in message.")
-		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'type' field not found"}))
+		logger.Debug("'event' not found in message.")
+		client.GetConnection().WriteJSON(responsemessage.ErrorMessage("Missing_Fields", map[string]interface{}{"message": "'event' field not found"}))
 		return
 	}
 
@@ -456,14 +473,14 @@ func relayMessageToTarget(client *client.Client, msg map[string]interface{}) {
 	}
 
 	switch msgtype {
-	case "offer", "answer", "candidate", "message":
+	case MsgTypeOffer, MsgTypeAnswer, MsgTypeCandidate, MsgTypeMessage:
 		delete(msg, "to")
 		msg["from"] = client.GetClientId()
 		if err := targetClient.GetConnection().WriteJSON(msg); err != nil {
 			logger.Debugf("Failed to relay message to target client %s: %v \n", targetID, err)
 		}
 	default:
-		logger.Debug("Unsupported message type: ", msg["type"])
+		logger.Debug("Unsupportedevent: ", msg["event"])
 	}
 }
 
@@ -507,7 +524,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 		mu.Unlock()
 
 		// notify all clients in this room about the update
-		notifyUpdateIntheRoom(roomIds[0], "client_removed")
+		notifyUpdateIntheRoom(roomIds[0], "Client_Removed")
 	}
 	// if we did not pass room Id we have to find from which room to delete
 	// if client closed it's connection, we need to find of they are in room if yes delete
@@ -516,7 +533,7 @@ func removeClientFromRoom(clientId string, deleteClient bool, roomIds ...string)
 		for _, roomItem := range rooms {
 			for _, clientInRoom := range roomItem.GetClients() {
 				if clientInRoom == clientId {
-					notifyUpdateIntheRoom(roomItem.GetId(), "client_removed")
+					notifyUpdateIntheRoom(roomItem.GetId(), "Client_Removed")
 					mu.Lock()
 					roomItem.RemoveClient(clientId)
 					mu.Unlock()

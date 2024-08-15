@@ -22,15 +22,15 @@
 
 ## Supported Message Types
 
-- **`connect`**: Used to initiate a connection with another client. This message should include data such as the SDP and candidate information.
-- **`offer`**: Part of the WebRTC connection process, sent by a client to initiate a peer-to-peer connection.
-- **`answer`**: Sent in response to an `offer`, completing the WebRTC connection setup.
-- **`candidate`**: Contains ICE candidate information necessary for establishing the WebRTC connection.
-- **`message`**: General-purpose message type for sending data between connected clients.
-- **`create_room`**: Used to create a new room. The message should include the `room` and optionally the `name` of the room, inside `data` field.
-- **`join_room`**: Used to join a room. The message should include the `room` inside `data` field.
-- **`leave_room`**: Used to leave a room. The message should include the `room` inside `data` field.
-- **`end_room`**: Used to end a room. The message should include the `room` inside `data` field.
+- **`Connect`**: Used to initiate a connection with another client. This message should include data such as the SDP and candidate information.
+- **`Offer`**: Part of the WebRTC connection process, sent by a client to initiate a peer-to-peer connection.
+- **`Answer`**: Sent in response to an `offer`, completing the WebRTC connection setup.
+- **`Candidate`**: Contains ICE candidate information necessary for establishing the WebRTC connection.
+- **`Message`**: General-purpose message type for sending data between connected clients.
+- **`Create_Rom`**: Used to create a new room. The message should include the `room` and optionally the `name` of the room, inside `data` field.
+- **`Join_Room`**: Used to join a room. The message should include the `room` inside `data` field.
+- **`Leave_Room`**: Used to leave a room. The message should include the `room` inside `data` field.
+- **`End_Room`**: Used to end a room. The message should include the `room` inside `data` field.
 
 For full documentation [Visit here](http://peer2peerconnector.shankarammai.com.np "Visit here") 
 
