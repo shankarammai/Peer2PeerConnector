@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    >
+    <title>Peer2Peer Connector Demo</title>
+  </head>
+  <body>
+    <main class="container">
+        <header>
+            <nav>
+                <ul>
+                    <li><strong>Peer2Peer Connector</strong></li>
+                </ul>
+                <ul>
+                    <li><a href="/">Home</a></li>
+                    <li>
+                        <button id="themeToggleBtn" class="secondary">
+                            <span id="themeIcon">☀️</span>
+                        </button>
+                    </li>
+                </ul>
+            </nav>
+        </header>
+
+        <!-- Supported Events -->
+        <section>
+            <strong>Supported Events</strong>
+            <ul>
+                <li><strong>Connect:</strong> Initiates a connection with another client, including SDP and ICE candidate information.</li>
+                <li><strong>Offer:</strong> Starts a peer-to-peer connection via WebRTC.</li>
+                <li><strong>Answer:</strong> Completes WebRTC connection setup in response to an Offer.</li>
+                <li><strong>Candidate:</strong> Shares ICE candidate information.</li>
+                <li><strong>Message:</strong> General-purpose message for data exchange.</li>
+                <li><strong>Create_Room:</strong> Creates a new room with optional room name.</li>
+                <li><strong>Join_Room:</strong> Joins an existing room.</li>
+                <li><strong>Leave_Room:</strong> Leaves a room.</li>
+                <li><strong>End_Room:</strong> Ends a room session.</li>
+            </ul>
+        </section>
+
+        <!-- Notification Area -->
+        <div id="notificationArea"></div>
+
+        <!-- Client Interface -->
+        <div class="grid">
+            <!-- Client 1 -->
+            <section>
+                <h2>Client 1</h2>
+                <div id="client1Status">
+                    <button id="connectClient1Btn" class="primary">Connect</button>
+                </div>
+                <div id="client1Id"></div>
+                <div>
+                    <label for="client1MessageInput">JSON Message to Send</label>
+                    <textarea id="client1MessageInput" placeholder='{"type": "Message", "data": "Hello"}'></textarea>
+                    <button id="sendClient1Btn" class="secondary">Send</button>
+                </div>
+                <label for="client1SentData">Sent Data</label>
+                <textarea id="client1SentData" readonly placeholder="Sent messages will appear here"></textarea>
+                <label for="client1ReceivedData">Received Data</label>
+                <textarea id="client1ReceivedData" readonly placeholder="Received messages will appear here"></textarea>
+            </section>
+
+            <!-- Client 2 -->
+            <section>
+                <h2>Client 2</h2>
+                <div id="client2Status">
+                    <button id="connectClient2Btn" class="primary">Connect</button>
+                </div>
+                <div id="client2Id"></div>
+                <div>
+                    <label for="client2MessageInput">JSON Message to Send</label>
+                    <textarea id="client2MessageInput" placeholder='{"type": "Message", "data": "Hello"}'></textarea>
+                    <button id="sendClient2Btn" class="secondary">Send</button>
+                </div>
+                <label for="client2SentData">Sent Data</label>
+                <textarea id="client2SentData" readonly placeholder="Sent messages will appear here"></textarea>
+                <label for="client2ReceivedData">Received Data</label>
+                <textarea id="client2ReceivedData" readonly placeholder="Received messages will appear here"></textarea>
+            </section>
+        </div>
+    </main>
+    <script>
+        const connectClient1Btn = document.getElementById('connectClient1Btn');
+        const connectClient2Btn = document.getElementById('connectClient2Btn');
+        const sendClient1Btn = document.getElementById('sendClient1Btn');
+        const sendClient2Btn = document.getElementById('sendClient2Btn');
+
+        const client1Status = document.getElementById('client1Status');
+        const client2Status = document.getElementById('client2Status');
+        const client1IdDisplay = document.getElementById('client1Id');
+        const client2IdDisplay = document.getElementById('client2Id');
+
+        const client1MessageInput = document.getElementById('client1MessageInput');
+        const client1SentData = document.getElementById('client1SentData');
+        const client1ReceivedData = document.getElementById('client1ReceivedData');
+
+        const client2MessageInput = document.getElementById('client2MessageInput');
+        const client2SentData = document.getElementById('client2SentData');
+        const client2ReceivedData = document.getElementById('client2ReceivedData');
+
+        const notificationArea = document.getElementById('notificationArea');
+        const themeToggleBtn = document.getElementById('themeToggleBtn');
+        const themeIcon = document.getElementById('themeIcon');
+        const htmlElement = document.documentElement;
+
+        let socketClient1, socketClient2;
+
+        function updateStatus(container, idDisplay, isConnected, clientId = null) {
+            container.innerHTML = isConnected
+                ? `<span class="label success">Connected</span>`
+                : `<span class="label error">Disconnected</span>`;
+            if (clientId) {
+                idDisplay.textContent = `Client ID: ${clientId}`;
+            }
+        }
+
+        connectClient1Btn.addEventListener('click', () => {
+            if (socketClient1 && socketClient1.readyState === WebSocket.OPEN) return;
+            socketClient1 = new WebSocket('ws://localhost:8080');
+            setupSocket(socketClient1, client1ReceivedData, client1Status, client1IdDisplay, "Client 1");
+        });
+
+        sendClient1Btn.addEventListener('click', () => {
+            sendJSONMessage(client1MessageInput, client1SentData, socketClient1, "Client 1");
+        });
+
+        connectClient2Btn.addEventListener('click', () => {
+            if (socketClient2 && socketClient2.readyState === WebSocket.OPEN) return;
+            socketClient2 = new WebSocket('ws://localhost:8080');
+            setupSocket(socketClient2, client2ReceivedData, client2Status, client2IdDisplay, "Client 2");
+        });
+
+        sendClient2Btn.addEventListener('click', () => {
+            sendJSONMessage(client2MessageInput, client2SentData, socketClient2, "Client 2");
+        });
+
+        function sendJSONMessage(inputElement, sentDataElement, socket, clientName) {
+            const rawContent = inputElement.value.trim();
+            try {
+                const messageObject = JSON.parse(rawContent);
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    const message = {
+                        client: clientName,
+                        ...messageObject,
+                        timestamp: new Date().toISOString(),
+                    };
+                    socket.send(JSON.stringify(message, null, 2));
+                    updateDataArea(sentDataElement, `Sent: ${JSON.stringify(message, null, 2)}`);
+                    inputElement.value = '';
+                } else {
+                    showAlert(`${clientName} is not connected.`, 'danger');
+                }
+            } catch (error) {
+                showAlert('Invalid JSON format.', 'danger');
+            }
+        }
+
+        function setupSocket(socket, receivedDataElement, statusContainer, idDisplay, clientName) {
+            socket.addEventListener('open', () => {
+                updateStatus(statusContainer, idDisplay, true);
+            });
+
+            socket.addEventListener('message', (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === "info" && data.event === "Client_Details") {
+                    updateStatus(statusContainer, idDisplay, true, data.data.id);
+                } else {
+                    updateDataArea(receivedDataElement, `Received: ${JSON.stringify(data, null, 2)}`);
+                }
+            });
+
+            socket.addEventListener('close', () => {
+                updateStatus(statusContainer, idDisplay, false);
+            });
+
+            socket.addEventListener('error', () => {
+                showAlert(`${clientName} WebSocket error occurred.`, 'danger');
+            });
+        }
+
+        function updateDataArea(textArea, content) {
+            textArea.value += `\n---------\n${content}`;
+            textArea.scrollTop = textArea.scrollHeight; // Auto-scroll to the bottom
+        }
+
+        function showAlert(message, type) {
+            const alert = document.createElement('div');
+            alert.className = `alert ${type}`;
+            alert.textContent = message;
+            notificationArea.appendChild(alert);
+            setTimeout(() => alert.remove(), 3000);
+        }
+
+      // SVG Icons for Light (Sun) and Dark (Moon) Themes
+      const sunIcon = `
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                <path fill="currentColor" d="M12 4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v1a1 1 0 1 1-2 0V4zm6 7a1 1 0 1 1 0-2h1a1 1 0 0 1 0 2h-1zm-7 7a1 1 0 1 1 2 0v1a1 1 0 0 1-2 0v-1zM5 13a1 1 0 0 1 0-2H4a1 1 0 1 1 0 2h1zm9.657-7.071a1 1 0 0 1 1.414-1.414l.707.707a1 1 0 1 1-1.414 1.414l-.707-.707zm-9.9.707a1 1 0 0 1 1.414 0l.707.707a1 1 0 0 1-1.414 1.414l-.707-.707a1 1 0 0 1 0-1.414zm11.314 11.314a1 1 0 0 1 0 1.414l-.707.707a1 1 0 0 1-1.414-1.414l.707-.707a1 1 0 0 1 1.414 0zm-9.9.707a1 1 0 0 1-1.414 0l-.707-.707a1 1 0 0 1 1.414-1.414l.707.707a1 1 0 0 1 0 1.414zM12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"></path>
+            </svg>
+        `;
+        const moonIcon = `
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                <path fill="currentColor" d="M21.75 15.453a.998.998 0 0 0-1.277-.627 7.966 7.966 0 0 1-3.76.617 7.984 7.984 0 0 1-6.32-10.35.998.998 0 0 0-.628-1.277 9.984 9.984 0 1 0 11.985 11.985z"></path>
+            </svg>
+        `;
+
+        // Handle Theme Toggle
+        themeToggleBtn.addEventListener('click', () => {
+            const currentTheme = htmlElement.getAttribute('data-theme');
+            if (currentTheme === 'light') {
+                htmlElement.setAttribute('data-theme', 'dark');
+                themeIcon.textContent = '🌙'; // Update to Moon Icon
+            } else {
+                htmlElement.setAttribute('data-theme', 'light');
+                themeIcon.textContent = '☀️'; // Update to Sun Icon
+            }
+        });
+    </script>
+  </body>
+</html>

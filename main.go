@@ -9,20 +9,25 @@ import (
 	"github.com/shankarammai/Peer2PeerConnector/internal/server"
 	"github.com/sirupsen/logrus"
 )
+
 var logger = &logrus.Logger{
 	Out:   os.Stdout,
 	Level: logrus.DebugLevel,
 	Formatter: &logrus.TextFormatter{
-		DisableColors: false,
-		TimestampFormat : "2006-01-02 15:04:05",
-		FullTimestamp:true,
-		ForceColors: true,
+		DisableColors:   false,
+		TimestampFormat: "2006-01-02 15:04:05",
+		FullTimestamp:   true,
+		ForceColors:     true,
 	},
 }
 
 func main() {
 	logger.Info("Starting Web Server at port: 8080")
 	http.HandleFunc("/", handleRequest)
+	// Route for try.html
+	http.HandleFunc("/try", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/try.html")
+	})
 	HandleErrorLine(http.ListenAndServe(":8080", nil))
 }
 
