@@ -3,6 +3,8 @@
 
 **Peer2Peer Connector** is a WebSocket server designed to establish and manage real-time, low-latency connections between clients. It is the core component for enabling seamless peer-to-peer interactions and room management, making it an ideal solution for applications that require real-time data exchange and collaboration.
 
+**[Try Example](/try)**
+
 ## Key Features
 
 ### 1. Client Connection Management
